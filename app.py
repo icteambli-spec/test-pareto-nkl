@@ -56,8 +56,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-USER_DB = "pareto_nkl/config/users_pareto_nkl.json"
-MASTER_PATH = "pareto_nkl/master_pareto_nkl.xlsx"
+USER_DB = "pareto_nkl/config/test_users_pareto_nkl.json"
+MASTER_PATH = "pareto_nkl/test_master_pareto_nkl.xlsx"
 
 # =================================================================
 # 2. FUNGSI CORE & FIX LOGIN (SKRIP INTI)
