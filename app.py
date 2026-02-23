@@ -34,7 +34,7 @@ st.markdown("""
     <style>
     .stApp {
         background: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.8)), 
-                    url("https://res.cloudinary.com/dydpottpm/image/upload/v1769698444/What_is_Fraud__Definition_and_Examples_1_yck2yg.jpg");
+                    url("https://res.cloudinary.com/dydpottpm/image/upload/v1771858607/Prisoner_With_Sad_Face_Hold_Cage_In_Silence_Situation_Prison_Clipart_Arrested_Cage_PNG_and_Vector_with_Transparent_Background_for_Free_Download_xhpf5r.jpg");
         background-size: cover; background-attachment: fixed;
     }
     h1, h2, h3, p, span, label, .stTabs [data-baseweb="tab"] { 
@@ -408,3 +408,4 @@ elif st.session_state.page == "USER_INPUT":
                     st.balloons(); st.success("✅ Input keterangan sukses!"); time.sleep(2); clear_all_caches(); st.rerun()
 
     if st.button("Logout"): clear_all_caches(); st.session_state.page = "HOME"; st.rerun()
+
