@@ -289,7 +289,7 @@ elif st.session_state.page == "ADMIN_PANEL":
                 with st.spinner("Menghubungi Server ic@bli..."):
                     try:
                         # PERUBAHAN DISINI: Menggunakan URL Query String sesuai permintaan Anda
-                        api_url = f"https://inventorycontrolbali.my.id/api/download_data.php?periode=022026&jenisData=paretonkl"
+                        api_url = "https://inventorycontrolbali.my.id/api/download_data.php?periode=022026&jenisData=paretonkl"
                         
                         # Kirim request GET dengan API Key via header (atau disesuaikan dengan PHP Anda)
                         resp_api = requests.get(api_url, data={"api_key": PHP_API_KEY}, timeout=30)
@@ -441,4 +441,5 @@ elif st.session_state.page == "USER_INPUT":
                     st.balloons(); st.success("✅ Input keterangan sukses!"); time.sleep(2); clear_all_caches(); st.rerun()
 
     if st.button("Logout"): clear_all_caches(); st.session_state.page = "HOME"; st.rerun()
+
 
