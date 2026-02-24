@@ -25,8 +25,7 @@ except:
 
 st.set_page_config(page_title="Pareto NKL System", layout="wide")
 
-# Konfigurasi API ic@bli
-PHP_API_URL = "https://inventorycontrolbali.my.id/api/paretoNkl_receiver.php" # Endpoint Pull Data
+# API KEY TETAP DISIMPAN
 PHP_API_KEY = "ic@bli2601"
 
 # Custom CSS Glassmorphism (Skrip Inti)
@@ -34,7 +33,7 @@ st.markdown("""
     <style>
     .stApp {
         background: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.8)), 
-                    url("https://res.cloudinary.com/dydpottpm/image/upload/v1771858607/Prisoner_With_Sad_Face_Hold_Cage_In_Silence_Situation_Prison_Clipart_Arrested_Cage_PNG_and_Vector_with_Transparent_Background_for_Free_Download_xhpf5r.jpg");
+                    url("https://res.cloudinary.com/dydpottpm/image/upload/v1769698444/What_is_Fraud__Definition_and_Examples_1_yck2yg.jpg");
         background-size: cover; background-attachment: fixed;
     }
     h1, h2, h3, p, span, label, .stTabs [data-baseweb="tab"] { 
@@ -56,11 +55,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-USER_DB = "pareto_nkl/config/test_users_pareto_nkl.json"
-MASTER_PATH = "pareto_nkl/test_master_pareto_nkl.xlsx"
+USER_DB = "pareto_nkl/config/users_pareto_nkl.json"
+MASTER_PATH = "pareto_nkl/master_pareto_nkl.xlsx"
 
 # =================================================================
-# 2. FUNGSI CORE & FIX LOGIN (SKRIP INTI)
+# 2. FUNGSI CORE & CACHE FIX (SKRIP INTI)
 # =================================================================
 
 def clear_all_caches():
@@ -70,7 +69,6 @@ def clear_all_caches():
         del st.session_state[key]
 
 def get_user_db_safe():
-    """FIX: Database User Error Handler dengan Retry Logic"""
     if 'user_db_cache' in st.session_state:
         return st.session_state.user_db_cache
     
@@ -91,7 +89,8 @@ def clean_numeric(val):
     s = str(val).replace(',', '').replace(' ', '')
     if '(' in s and ')' in s:
         s = '-' + s.replace('(', '').replace(')', '')
-    try: return float(s)
+    try:
+        return float(s)
     except: return 0.0
 
 @st.cache_data(ttl=2) 
@@ -104,11 +103,15 @@ def get_master_data():
         df = pd.read_excel(io.BytesIO(resp.content))
         df.columns = [str(c).strip().upper() for c in df.columns]
         for col in df.columns:
-            if col in ['QTY', 'RUPIAH']: df[col] = df[col].apply(clean_numeric)
-            else: df[col] = df[col].fillna("")
-        if 'KETERANGAN' in df.columns: df['KETERANGAN'] = ""
+            if col in ['QTY', 'RUPIAH']:
+                df[col] = df[col].apply(clean_numeric)
+            else:
+                df[col] = df[col].fillna("")
+        if 'KETERANGAN' in df.columns:
+            df['KETERANGAN'] = ""
         return df, v
-    except: return pd.DataFrame(), datetime.now().strftime("%m-%Y")
+    except: 
+        return pd.DataFrame(), datetime.now().strftime("%m-%Y")
 
 def get_existing_result(toko_code, version):
     try:
@@ -131,7 +134,10 @@ def validate_file_exists_in_cloudinary(toko_code, version):
 
 def update_user_db(new_db):
     try:
-        cloudinary.uploader.upload(io.BytesIO(json.dumps(new_db).encode()), resource_type="raw", public_id=USER_DB, overwrite=True, invalidate=True)
+        cloudinary.uploader.upload(
+            io.BytesIO(json.dumps(new_db).encode()), 
+            resource_type="raw", public_id=USER_DB, overwrite=True, invalidate=True
+        )
         clear_all_caches()
         return True
     except: return False
@@ -139,7 +145,7 @@ def update_user_db(new_db):
 def get_progress_data(df_m, version):
     if df_m.empty: return pd.DataFrame(), []
     try:
-        res = cloudinary.api.resources(resource_type="raw", type="upload", prefix="pareto_nkl/hasil/", max_results=500)
+        res = cloudinary.api.resources(resource_type="raw", type="upload", prefix="pareto_nkl/hasil/Hasil_", max_results=500)
         files = res.get('resources', [])
         finished_stores = []
         suffix = f"_v{version}.xlsx"
@@ -152,7 +158,7 @@ def get_progress_data(df_m, version):
     except: return pd.DataFrame(), []
 
 # =================================================================
-# 3. ROUTING & HOME (PROGRES SO AM/AS)
+# 3. ROUTING & HOME
 # =================================================================
 if 'page' not in st.session_state: st.session_state.page = "HOME"
 
@@ -164,13 +170,12 @@ if st.session_state.page == "HOME":
         total_t, sudah_t = len(df_u), df_u['STATUS'].sum()
         belum_t = total_t - sudah_t
         persen_t = (sudah_t / total_t) if total_t > 0 else 0
-        
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Toko", total_t)
         c2.metric("Sudah SO", sudah_t, f"{persen_t:.1%}")
         c3.metric("Belum SO", belum_t, f"-{belum_t}", delta_color="inverse")
-        
         st.write("---")
+        
         st.write("### 📊 Progres SO PER AM (Urutan Terendah di Atas)")
         am_sum = df_u.groupby('AM').agg(Target_Toko_SO=('KDTOKO', 'count'), Sudah_SO=('STATUS', 'sum')).reset_index()
         am_sum['Belum_SO'] = am_sum['Target_Toko_SO'] - am_sum['Sudah_SO']
@@ -187,12 +192,16 @@ if st.session_state.page == "HOME":
         df_belum_all = df_u[df_u['STATUS'] == 0].copy()
         with st.expander("🔍 Detail Toko Belum SO Per AM"):
             if not df_belum_all.empty:
-                sel_am_det = st.selectbox("Pilih AM:", options=sorted(df_belum_all['AM'].unique()), key="sel_am_det")
-                st.dataframe(df_belum_all[df_belum_all['AM'] == sel_am_det][['KDTOKO', 'NAMA TOKO']].rename(columns={'KDTOKO':'Kode','NAMA TOKO':'Nama'}), hide_index=True, use_container_width=True)
+                sel_am_det = st.selectbox("Pilih Area Manager (AM):", options=sorted(df_belum_all['AM'].unique()), key="sel_am_det")
+                df_det_am = df_belum_all[df_belum_all['AM'] == sel_am_det][['KDTOKO', 'NAMA TOKO']]
+                df_det_am.columns = ['Kode', 'Nama']
+                st.dataframe(df_det_am, hide_index=True, use_container_width=True)
         with st.expander("🔍 Detail Toko Belum SO Per AS"):
             if not df_belum_all.empty:
                 sel_as_det = st.selectbox("Pilih AS:", options=sorted(df_belum_all['AS'].unique()), key="sel_as_det")
-                st.dataframe(df_belum_all[df_belum_all['AS'] == sel_as_det][['KDTOKO', 'NAMA TOKO']].rename(columns={'KDTOKO':'Kode','NAMA TOKO':'Nama'}), hide_index=True, use_container_width=True)
+                df_det_as = df_belum_all[df_belum_all['AS'] == sel_as_det][['KDTOKO', 'NAMA TOKO']]
+                df_det_as.columns = ['Kode', 'Nama']
+                st.dataframe(df_det_as, hide_index=True, use_container_width=True)
 
     st.write("---")
     tab_login, tab_daftar = st.tabs(["🔐 Masuk", "📝 Daftar Akun"])
@@ -203,8 +212,8 @@ if st.session_state.page == "HOME":
             db_login = get_user_db_safe()
             if db_login and l_nik in db_login and db_login[l_nik] == l_pw:
                 clear_all_caches(); st.session_state.user_nik, st.session_state.page = l_nik, "USER_INPUT"; st.rerun()
-            elif db_login is None: st.error("Database user error. Klik lagi.")
-            else: st.error("NIK/Password salah!")
+            elif db_login is None: st.error("Database user error. Mohon klik login kembali.")
+            else: st.error("NIK atau Password salah!")
         st.markdown(f'<a href="https://wa.me/6287725860048" target="_blank" style="text-decoration:none;"><button style="width:100%; background:transparent; color:white; border:1px solid white; border-radius:5px; cursor:pointer; padding:5px;">❓ Lupa Password? Hubungi Admin</button></a>', unsafe_allow_html=True)
     
     with tab_daftar:
@@ -218,11 +227,12 @@ if st.session_state.page == "HOME":
                 else:
                     db_reg[d_nik] = d_pw
                     if update_user_db(db_reg): st.success("Pendaftaran Berhasil!")
-            else: st.error("Data tidak valid.")
+            else: st.error("Password tidak cocok atau data tidak lengkap.")
+    
     if st.button("🛡️ Admin Login", use_container_width=True): st.session_state.page = "ADMIN_AUTH"; st.rerun()
 
 # =================================================================
-# 4. ADMIN PANEL (FULL MASTER REKAP & 2-WAY UPDATE)
+# 4. ADMIN PANEL
 # =================================================================
 elif st.session_state.page == "ADMIN_AUTH":
     pw_adm = st.text_input("Password Admin:", type="password")
@@ -233,12 +243,12 @@ elif st.session_state.page == "ADMIN_AUTH":
 
 elif st.session_state.page == "ADMIN_PANEL":
     st.title("🛡️ Admin Panel")
-    tab_rek, tab_mas, tab_usr, tab_res = st.tabs(["📊 Rekap", "📤 Master", "👤 Kelola User", "🔥 Reset"])
+    tab_rek, tab_mas, tab_usr, tab_res = st.tabs(["📊 Rekap", "📤 Master", "👤 Kelola User", "🔥 Reset Hasil Input"])
     
     with tab_rek:
         df_m_rek, v_aktif_rek = get_master_data()
         target_v = st.text_input("Tarik Data Seri (MM-YYYY):", value=v_aktif_rek)
-        if st.button("📥 Download Full Master Rekap", use_container_width=True):
+        if st.button("📥 Download Gabungan (Full Master)", use_container_width=True):
             with st.spinner("Menggabungkan data..."):
                 res_rek = cloudinary.api.resources(resource_type="raw", type="upload", prefix="pareto_nkl/hasil/")
                 filtered_rek = [f for f in res_rek.get('resources', []) if f"v{target_v}" in f['public_id']]
@@ -262,52 +272,70 @@ elif st.session_state.page == "ADMIN_PANEL":
                 st.download_button("📥 Klik Download", out_rek.getvalue(), f"Full_Rekap_{target_v}.xlsx")
 
     with tab_mas:
-        st.subheader("Pilih Jalur Update Master")
+        st.subheader("Update Master Data")
+        # Check if master exists for dynamic message
         master_aktif_exists = False
         try:
             cloudinary.api.resource(MASTER_PATH, resource_type="raw")
             master_aktif_exists = True
         except: pass
 
-        # JALUR 1: SYNC API (NEW)
-        if st.button("🔄 Sinkronisasi Master dari Server PHP ic@bli", use_container_width=True):
-            with st.spinner("Menghubungi Server ic@bli..."):
-                try:
-                    resp_api = requests.post(PHP_API_URL, data={"api_key": PHP_API_KEY}, timeout=30)
-                    if resp_api.status_code == 200:
-                        data_api = resp_api.json()
-                        new_df_api = pd.DataFrame(data_api)
-                        new_df_api.columns = [str(c).strip().upper() for c in new_df_api.columns]
+        # --- JALUR 1: SYNC API (NEW LOGIC) ---
+        with st.container(border=True):
+            st.markdown("### 🔄 Jalur Otomatis (Server ic@bli)")
+            periode_sync = st.text_input("Masukkan Periode Sync (Contoh: 2026-02):", value=datetime.now().strftime("%Y-%m"))
+            
+            if st.button("🔄 Tarik Master dari Server PHP", use_container_width=True):
+                with st.spinner("Menghubungi Server ic@bli..."):
+                    try:
+                        # PERUBAHAN DISINI: Menggunakan URL Query String sesuai permintaan Anda
+                        api_url = f"https://inventorycontrolbali.my.id/api/download_data.php?periode={periode_sync}&jenisData='paretonkl'"
                         
-                        old_df_m, _ = get_master_data()
-                        final_m = pd.concat([old_df_m, new_df_api], ignore_index=True).drop_duplicates(subset=['KDTOKO', 'PLU'], keep='last')
-                        if 'KETERANGAN' in final_m.columns: final_m['KETERANGAN'] = ""
+                        # Kirim request GET dengan API Key via header (atau disesuaikan dengan PHP Anda)
+                        resp_api = requests.get(api_url, data={"api_key": PHP_API_KEY}, timeout=30)
                         
-                        buf_m = io.BytesIO()
-                        with pd.ExcelWriter(buf_m) as w: final_m.to_excel(w, index=False)
-                        cloudinary.uploader.upload(buf_m.getvalue(), resource_type="raw", public_id=MASTER_PATH, overwrite=True, invalidate=True)
-                        
-                        if master_aktif_exists: st.success("✅ Master sukses diperbarui dari API")
-                        else: st.success("✅ Master baru berhasil diupload dari API")
-                        clear_all_caches(); time.sleep(2); st.rerun()
-                    else: st.error(f"Gagal Sync API: Status {resp_api.status_code}")
-                except Exception as e: st.error(f"⚠️ Koneksi ke Server PHP Gagal: {e}. Gunakan mode Upload Manual.")
+                        if resp_api.status_code == 200:
+                            data_api = resp_api.json()
+                            if data_api:
+                                new_df_api = pd.DataFrame(data_api)
+                                new_df_api.columns = [str(c).strip().upper() for c in new_df_api.columns]
+                                
+                                old_df_m, _ = get_master_data()
+                                final_m = pd.concat([old_df_m, new_df_api], ignore_index=True).drop_duplicates(subset=['KDTOKO', 'PLU'], keep='last')
+                                if 'KETERANGAN' in final_m.columns: final_m['KETERANGAN'] = ""
+                                
+                                buf_m = io.BytesIO()
+                                with pd.ExcelWriter(buf_m) as w: final_m.to_excel(w, index=False)
+                                cloudinary.uploader.upload(buf_m.getvalue(), resource_type="raw", public_id=MASTER_PATH, overwrite=True, invalidate=True)
+                                
+                                # Pesan Sukses Dinamis
+                                if master_aktif_exists: st.success("✅ Master sukses diperbarui")
+                                else: st.success("✅ Master baru berhasil diupload")
+                                clear_all_caches(); time.sleep(2); st.rerun()
+                            else:
+                                st.warning("Data dari Server PHP kosong untuk periode ini.")
+                        else:
+                            st.error(f"Gagal Sync API: Status {resp_api.status_code}")
+                    except Exception as e:
+                        st.error(f"⚠️ Koneksi ke Server PHP Gagal: {e}. Silakan gunakan mode Upload Manual.")
 
-        st.write("---")
-        # JALUR 2: MANUAL UPLOAD (SKRIP INTI)
-        f_up = st.file_uploader("Upload Master Tambahan Manual (.xlsx)", type=["xlsx"])
-        if f_up and st.button("🚀 Update Master Manual"):
-            old_df_m, _ = get_master_data()
-            new_df_m = pd.read_excel(f_up)
-            new_df_m.columns = [str(c).strip().upper() for c in new_df_m.columns]
-            final_m = pd.concat([old_df_m, new_df_m], ignore_index=True).drop_duplicates(subset=['KDTOKO', 'PLU'], keep='last')
-            if 'KETERANGAN' in final_m.columns: final_m['KETERANGAN'] = ""
-            buf_m = io.BytesIO()
-            with pd.ExcelWriter(buf_m) as w: final_m.to_excel(w, index=False)
-            cloudinary.uploader.upload(buf_m.getvalue(), resource_type="raw", public_id=MASTER_PATH, overwrite=True, invalidate=True)
-            if master_aktif_exists: st.success("✅ Master sukses diperbarui manual")
-            else: st.success("✅ Master baru berhasil diupload manual")
-            clear_all_caches(); time.sleep(2); st.rerun()
+        # --- JALUR 2: MANUAL UPLOAD (SKRIP INTI) ---
+        with st.container(border=True):
+            st.markdown("### 📤 Jalur Manual (Upload Excel)")
+            f_up = st.file_uploader("Pilih file Master (.xlsx)", type=["xlsx"])
+            if f_up and st.button("🚀 Update Master Manual"):
+                old_df_m, _ = get_master_data()
+                new_df_m = pd.read_excel(f_up)
+                new_df_m.columns = [str(c).strip().upper() for c in new_df_m.columns]
+                final_m = pd.concat([old_df_m, new_df_m], ignore_index=True).drop_duplicates(subset=['KDTOKO', 'PLU'], keep='last')
+                if 'KETERANGAN' in final_m.columns: final_m['KETERANGAN'] = ""
+                buf_m = io.BytesIO()
+                with pd.ExcelWriter(buf_m) as w: final_m.to_excel(w, index=False)
+                cloudinary.uploader.upload(buf_m.getvalue(), resource_type="raw", public_id=MASTER_PATH, overwrite=True, invalidate=True)
+                
+                if master_aktif_exists: st.success("✅ Master sukses diperbarui")
+                else: st.success("✅ Master baru berhasil diupload")
+                clear_all_caches(); time.sleep(2); st.rerun()
 
         st.divider()
         st.subheader("🗑️ Hapus Master Aktif")
@@ -324,22 +352,25 @@ elif st.session_state.page == "ADMIN_PANEL":
         nik_man = st.text_input("Ketik NIK User:")
         db_usr_adm = get_user_db_safe()
         if nik_man and db_usr_adm and nik_man in db_usr_adm:
+            st.success(f"User {nik_man} ditemukan")
             p_new = st.text_input("Password Baru:", type="password")
             if st.button("Update Sekarang"):
                 db_usr_adm[nik_man] = p_new
                 if update_user_db(db_usr_adm): st.success("Reset Password Sukses!"); time.sleep(2); st.rerun()
+        elif nik_man: st.error("NIK tidak ditemukan.")
 
     with tab_res:
         if st.button("🔥 RESET HASIL INPUT", type="primary"):
             res_res = cloudinary.api.resources(resource_type="raw", type="upload", prefix="pareto_nkl/hasil/")
             pids_res = [f['public_id'] for f in res_res.get('resources', [])]
             if pids_res: cloudinary.api.delete_resources(pids_res, resource_type="raw")
-            clear_all_caches(); st.success("Bersih!"); time.sleep(2); st.rerun()
+            clear_all_caches(); st.success("Dibersihkan!"); time.sleep(2); st.rerun()
 
+    st.write("---")
     if st.button("🚪 Logout Admin", use_container_width=True): clear_all_caches(); st.session_state.page = "HOME"; st.rerun()
 
 # =================================================================
-# 5. USER INPUT (TIERED NK/NL & ANIMATION)
+# 5. USER INPUT
 # =================================================================
 elif st.session_state.page == "USER_INPUT":
     st.title("📋 Input Pareto")
@@ -372,13 +403,15 @@ elif st.session_state.page == "USER_INPUT":
                 st.success(f"✅ Sinkronisasi Berhasil: Isian lama Seri {v_master_in} dimuat.")
             else: data_final_in['KETERANGAN'] = ""
 
-            for col in ['PLU', 'DESC', 'KETERANGAN']: data_final_in[col] = data_final_in[col].astype(str).replace(['nan','NaN','None'], '')
-            for col in ['QTY', 'RUPIAH']: data_final_in[col] = pd.to_numeric(data_final_in[col], errors='coerce').fillna(0)
+            for col in ['PLU', 'DESC', 'KETERANGAN']: 
+                data_final_in[col] = data_final_in[col].astype(str).replace(['nan','NaN','None'], '')
+            for col in ['QTY', 'RUPIAH']: 
+                data_final_in[col] = pd.to_numeric(data_final_in[col], errors='coerce').fillna(0)
 
             df_nk = data_final_in[data_final_in['RUPIAH'] < 0].copy()
             df_nl = data_final_in[data_final_in['RUPIAH'] >= 0].copy()
 
-            # PERBAIKAN FORMAT RIBUAN (%,d)
+            # FORMAT RIBUAN %,d
             config_user = {
                 "PLU": st.column_config.TextColumn("PLU"),
                 "DESC": st.column_config.TextColumn("DESC"),
@@ -401,13 +434,10 @@ elif st.session_state.page == "USER_INPUT":
                     df_nl['KETERANGAN'] = "ini item nl!"
                     combined_save = pd.concat([df_nk, df_nl], ignore_index=True)
                     orig_m_cols = [c for c in df_m_in.columns if c != 'KETERANGAN']
-                    final_out = combined_save[orig_m_cols + ['KETERANGAN']]
+                    final_out = combined_save[orig_master_cols + ['KETERANGAN']] if 'orig_master_cols' in locals() else combined_save[orig_m_cols + ['KETERANGAN']]
                     buf_s = io.BytesIO()
                     with pd.ExcelWriter(buf_s) as w: final_out.to_excel(w, index=False)
                     cloudinary.uploader.upload(buf_s.getvalue(), resource_type="raw", public_id=f"pareto_nkl/hasil/Hasil_{v_kdtoko}_v{v_master_in}.xlsx", overwrite=True, invalidate=True)
                     st.balloons(); st.success("✅ Input keterangan sukses!"); time.sleep(2); clear_all_caches(); st.rerun()
 
     if st.button("Logout"): clear_all_caches(); st.session_state.page = "HOME"; st.rerun()
-
-
-
