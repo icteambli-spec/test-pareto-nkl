@@ -26,7 +26,7 @@ except:
 st.set_page_config(page_title="Pareto NKL System", layout="wide")
 
 # Konfigurasi API ic@bli
-PHP_API_URL = "https://inventorycontrolbali.my.id/api/paretoNkl_sync_pull.php" # Endpoint Pull Data
+PHP_API_URL = "https://inventorycontrolbali.my.id/api/paretoNkl_receiver.php" # Endpoint Pull Data
 PHP_API_KEY = "ic@bli2601"
 
 # Custom CSS Glassmorphism (Skrip Inti)
@@ -408,4 +408,5 @@ elif st.session_state.page == "USER_INPUT":
                     st.balloons(); st.success("✅ Input keterangan sukses!"); time.sleep(2); clear_all_caches(); st.rerun()
 
     if st.button("Logout"): clear_all_caches(); st.session_state.page = "HOME"; st.rerun()
+
 
