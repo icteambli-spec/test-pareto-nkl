@@ -2,414 +2,212 @@ import streamlit as st
 import pandas as pd
 import cloudinary
 import cloudinary.uploader
-import cloudinary.api
-import io
 import requests
-import json
+from io import BytesIO
 import time
-import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# =================================================================
-# 1. KONFIGURASI & CLOUDINARY
-# =================================================================
-try:
-    cloudinary.config( 
-      cloud_name = st.secrets["cloud_name"], 
-      api_key = st.secrets["api_key"], 
-      api_secret = st.secrets["api_secret"],
-      secure = True
-    )
-except:
-    st.error("Konfigurasi Secrets Cloudinary tidak ditemukan!")
+# ==========================================
+# 1. KONFIGURASI HALAMAN & HIDE GITHUB LOGO
+# ==========================================
+st.set_page_config(page_title="Web Say Bread", layout="wide")
 
-st.set_page_config(page_title="Pareto NKL System", layout="wide")
-
-# API KEY TETAP DISIMPAN (Jaga-jaga jika PHP butuh di masa depan)
-PHP_API_KEY = "ic@bli2601"
-
-# PERMINTAAN 2: Nama Master diawali "test_"
-MASTER_PATH = "pareto_nkl/test_master_pareto_nkl.xlsx"
-
-# Custom CSS Glassmorphism
-st.markdown("""
-    <style>
-    .stApp {
-        background: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.8)), 
-                    url("https://res.cloudinary.com/dydpottpm/image/upload/v1769698444/What_is_Fraud__Definition_and_Examples_1_yck2yg.jpg");
-        background-size: cover; background-attachment: fixed;
-    }
-    h1, h2, h3, p, span, label, .stTabs [data-baseweb="tab"] { 
-        color: white !important; 
-        text-shadow: 1px 1px 2px black; 
-    }
-    div[data-testid="stDataEditor"], div[data-testid="stDataFrame"] { 
-        background-color: rgba(255,255,255,0.05); 
-        border-radius: 10px; padding: 10px; 
-    }
-    [data-testid="stMetric"] {
-        background-color: rgba(255, 255, 255, 0.1);
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-    }
-    .nk-label { background-color: rgba(255, 75, 75, 0.2); padding: 10px; border-radius: 5px; border-left: 5px solid #ff4b4b; margin-bottom: 10px; }
-    .nl-label { background-color: rgba(46, 204, 113, 0.2); padding: 10px; border-radius: 5px; border-left: 5px solid #2ecc71; margin-bottom: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-USER_DB = "pareto_nkl/config/users_pareto_nkl.json"
-
-# =================================================================
-# 2. FUNGSI CORE & CACHE FIX
-# =================================================================
-
-def clear_all_caches():
-    st.cache_data.clear()
-    keys_to_delete = [k for k in st.session_state.keys() if any(x in k for x in ['ed_', 'result', 'data_toko', 'hash', 'user_db'])]
-    for key in keys_to_delete:
-        del st.session_state[key]
-
-def get_user_db_safe():
-    if 'user_db_cache' in st.session_state:
-        return st.session_state.user_db_cache
-    url_user = f"https://res.cloudinary.com/{st.secrets['cloud_name']}/raw/upload/v1/{USER_DB}?t={int(time.time())}"
-    for i in range(3):
-        try:
-            resp = requests.get(url_user, timeout=10)
-            if resp.status_code == 200:
-                db = resp.json()
-                st.session_state.user_db_cache = db
-                return db
-        except: time.sleep(1)
-    return None
-
-def clean_numeric(val):
-    if pd.isna(val) or val == "": return 0.0
-    s = str(val).replace(',', '').replace(' ', '')
-    if '(' in s and ')' in s: s = '-' + s.replace('(', '').replace(')', '')
-    try: return float(s)
-    except: return 0.0
-
-@st.cache_data(ttl=2) 
-def get_master_data():
-    try:
-        v = datetime.now().strftime("%m-%Y") 
-        res = cloudinary.api.resource(MASTER_PATH, resource_type="raw", invalidate=True)
-        url_master = f"{res['secure_url']}?t={int(time.time())}"
-        resp = requests.get(url_master)
-        df = pd.read_excel(io.BytesIO(resp.content))
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        for col in df.columns:
-            if col in ['QTY', 'RUPIAH']: df[col] = df[col].apply(clean_numeric)
-            else: df[col] = df[col].fillna("")
-        if 'KETERANGAN' in df.columns: df['KETERANGAN'] = ""
-        return df, v
-    except: return pd.DataFrame(), datetime.now().strftime("%m-%Y")
-
-def get_existing_result(toko_code, version):
-    try:
-        # PERMINTAAN 2: Awalan "test_"
-        p_id = f"pareto_nkl/hasil/test_Hasil_{toko_code}_v{version}.xlsx"
-        url = f"https://res.cloudinary.com/{st.secrets['cloud_name']}/raw/upload/v1/{p_id}?t={int(time.time())}"
-        resp = requests.get(url, timeout=3)
-        if resp.status_code == 200:
-            df_res = pd.read_excel(io.BytesIO(resp.content))
-            df_res.columns = [str(c).strip().upper() for c in df_res.columns]
-            return df_res
-        return None
-    except: return None
-
-def validate_file_exists_in_cloudinary(toko_code, version):
-    try:
-        p_id = f"pareto_nkl/hasil/test_Hasil_{toko_code}_v{version}.xlsx"
-        cloudinary.api.resource(p_id, resource_type="raw")
-        return True
-    except: return False
-
-def update_user_db(new_db):
-    try:
-        cloudinary.uploader.upload(io.BytesIO(json.dumps(new_db).encode()), resource_type="raw", public_id=USER_DB, overwrite=True, invalidate=True)
-        clear_all_caches()
-        return True
-    except: return False
-
-def get_progress_data(df_m, version):
-    if df_m.empty: return pd.DataFrame(), []
-    try:
-        res = cloudinary.api.resources(resource_type="raw", type="upload", prefix="pareto_nkl/hasil/test_Hasil_", max_results=500)
-        files = res.get('resources', [])
-        finished_stores = []
-        suffix = f"_v{version}.xlsx"
-        for f in files:
-            p_id = f['public_id'].split('/')[-1]
-            if p_id.endswith(suffix):
-                kdt = p_id.replace("test_Hasil_", "").replace(suffix, "")
-                finished_stores.append(kdt)
-        df_unique = df_m.drop_duplicates(subset=['KDTOKO']).copy()
-        df_unique['STATUS'] = df_unique['KDTOKO'].apply(lambda x: 1 if x in finished_stores else 0)
-        return df_unique, finished_stores
-    except: return pd.DataFrame(), []
-
-# =================================================================
-# 3. ROUTING & HOME
-# =================================================================
-if 'page' not in st.session_state: st.session_state.page = "HOME"
-
-if st.session_state.page == "HOME":
-    st.title("📑 Sistem Penjelasan Pareto NKL")
-    df_m_prog, v_prog = get_master_data()
-    if not df_m_prog.empty:
-        df_u, finished_list = get_progress_data(df_m_prog, v_prog)
-        total_t, sudah_t = len(df_u), df_u['STATUS'].sum()
-        belum_t = total_t - sudah_t
-        persen_t = (sudah_t / total_t) if total_t > 0 else 0
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Toko", total_t)
-        c2.metric("Sudah SO", sudah_t, f"{persen_t:.1%}")
-        c3.metric("Belum SO", belum_t, f"-{belum_t}", delta_color="inverse")
-        st.write("---")
-        
-        st.write("### 📊 Progres SO PER AM (Urutan Terendah di Atas)")
-        am_sum = df_u.groupby('AM').agg(Target_Toko_SO=('KDTOKO', 'count'), Sudah_SO=('STATUS', 'sum')).reset_index()
-        am_sum['Belum_SO'] = am_sum['Target_Toko_SO'] - am_sum['Sudah_SO']
-        am_sum['Progres_Val'] = (am_sum['Sudah_SO'] / am_sum['Target_Toko_SO']).round(2)
-        st.dataframe(am_sum.sort_values('Progres_Val'), column_config={"Target_Toko_SO":"Target Toko SO","Sudah_SO":"Sudah SO","Belum_SO":"Belum SO","Progres_Val": st.column_config.ProgressColumn("Progres", format="%.2f", min_value=0, max_value=1)}, hide_index=True, use_container_width=True)
-
-        st.write("### 📊 Progres SO PER AS (Urutan Terendah di Atas)")
-        as_sum = df_u.groupby('AS').agg(Target_Toko_SO=('KDTOKO', 'count'), Sudah_SO=('STATUS', 'sum')).reset_index()
-        as_sum['Belum_SO'] = as_sum['Target_Toko_SO'] - as_sum['Sudah_SO']
-        as_sum['Progres_Val'] = (as_sum['Sudah_SO'] / as_sum['Target_Toko_SO']).round(2)
-        st.dataframe(as_sum.sort_values('Progres_Val'), column_config={"Target_Toko_SO":"Target Toko SO","Sudah_SO":"Sudah SO","Belum_SO":"Belum SO","Progres_Val": st.column_config.ProgressColumn("Progres", format="%.2f", min_value=0, max_value=1)}, hide_index=True, use_container_width=True)
-
-        st.write("---")
-        df_belum_all = df_u[df_u['STATUS'] == 0].copy()
-        with st.expander("🔍 Detail Toko Belum SO Per AM"):
-            if not df_belum_all.empty:
-                sel_am_det = st.selectbox("Pilih AM:", options=sorted(df_belum_all['AM'].unique()), key="sel_am_det")
-                st.dataframe(df_belum_all[df_belum_all['AM'] == sel_am_det][['KDTOKO', 'NAMA TOKO']].rename(columns={'KDTOKO':'Kode','NAMA TOKO':'Nama'}), hide_index=True, use_container_width=True)
-        with st.expander("🔍 Detail Toko Belum SO Per AS"):
-            if not df_belum_all.empty:
-                sel_as_det = st.selectbox("Pilih AS:", options=sorted(df_belum_all['AS'].unique()), key="sel_as_det")
-                st.dataframe(df_belum_all[df_belum_all['AS'] == sel_as_det][['KDTOKO', 'NAMA TOKO']].rename(columns={'KDTOKO':'Kode','NAMA TOKO':'Nama'}), hide_index=True, use_container_width=True)
-
-    st.write("---")
-    tab_login, tab_daftar = st.tabs(["🔐 Masuk", "📝 Daftar Akun"])
-    with tab_login:
-        l_nik = st.text_input("NIK:", max_chars=10, key="l_nik")
-        l_pw = st.text_input("Password:", type="password", key="l_pw")
-        if st.button("LOG IN", type="primary", use_container_width=True):
-            db_login = get_user_db_safe()
-            if db_login and l_nik in db_login and db_login[l_nik] == l_pw:
-                clear_all_caches(); st.session_state.user_nik, st.session_state.page = l_nik, "USER_INPUT"; st.rerun()
-            elif db_login is None: st.error("Database user error. Mohon klik login kembali.")
-            else: st.error("NIK atau Password salah!")
-        st.markdown(f'<a href="https://wa.me/6287725860048" target="_blank" style="text-decoration:none;"><button style="width:100%; background:transparent; color:white; border:1px solid white; border-radius:5px; cursor:pointer; padding:5px;">❓ Lupa Password? Hubungi Admin</button></a>', unsafe_allow_html=True)
-    with tab_daftar:
-        d_nik = st.text_input("NIK Baru:", max_chars=10, key="d_nik")
-        d_pw = st.text_input("Password Baru:", type="password", key="d_pw")
-        d_cpw = st.text_input("Konfirmasi Password:", type="password", key="d_cpw")
-        if st.button("DAFTAR", use_container_width=True):
-            if d_nik and d_pw == d_cpw:
-                db_reg = get_user_db_safe()
-                if db_reg and d_nik in db_reg: st.warning("NIK sudah ada.")
-                else:
-                    db_reg[d_nik] = d_pw
-                    if update_user_db(db_reg): st.success("Pendaftaran Berhasil!")
-            else: st.error("Password tidak cocok atau data tidak lengkap.")
-    if st.button("🛡️ Admin Login", use_container_width=True): st.session_state.page = "ADMIN_AUTH"; st.rerun()
-
-# =================================================================
-# 4. ADMIN PANEL (SYNC FIX BROWSER MASKING)
-# =================================================================
-elif st.session_state.page == "ADMIN_AUTH":
-    pw_adm = st.text_input("Password Admin:", type="password")
-    if st.button("Masuk Admin"):
-        if pw_adm == "icnkl034": clear_all_caches(); st.session_state.page = "ADMIN_PANEL"; st.rerun()
-        else: st.error("Password Admin Salah!")
-    if st.button("Kembali"): st.session_state.page = "HOME"; st.rerun()
-
-elif st.session_state.page == "ADMIN_PANEL":
-    st.title("🛡️ Admin Panel")
-    tab_rek, tab_mas, tab_usr, tab_res = st.tabs(["📊 Rekap", "📤 Master", "👤 Kelola User", "🔥 Reset"])
-    
-    with tab_rek:
-        df_m_rek, v_aktif_rek = get_master_data()
-        target_v = st.text_input("Tarik Data Seri (MM-YYYY):", value=v_aktif_rek)
-        if st.button("📥 Download Gabungan (Full Master)", use_container_width=True):
-            with st.spinner("Menggabungkan data..."):
-                res_rek = cloudinary.api.resources(resource_type="raw", type="upload", prefix="pareto_nkl/hasil/test_Hasil_")
-                filtered_rek = [f for f in res_rek.get('resources', []) if f"v{target_v}" in f['public_id']]
-                combined_in = pd.DataFrame(columns=['KDTOKO', 'PLU', 'KETERANGAN'])
-                if filtered_rek:
-                    inputs_rek = []
-                    for f in filtered_rek:
-                        try:
-                            df_t = pd.read_excel(f"{f['secure_url']}?t={int(time.time())}")
-                            df_t.columns = [str(c).upper().strip() for c in df_t.columns]
-                            inputs_rek.append(df_t[['KDTOKO', 'PLU', 'KETERANGAN']])
-                        except: pass
-                    if inputs_rek: combined_in = pd.concat(inputs_rek, ignore_index=True).drop_duplicates(subset=['KDTOKO', 'PLU'])
-                
-                m_cols = list(df_m_rek.columns)
-                df_m_mrg = df_m_rek.drop(columns=['KETERANGAN']) if 'KETERANGAN' in df_m_rek.columns else df_m_rek.copy()
-                final_rekap = df_m_mrg.merge(combined_in, on=['KDTOKO', 'PLU'], how='left').fillna("")
-                final_rekap = final_rekap[m_cols if 'KETERANGAN' in m_cols else m_cols + ['KETERANGAN']]
-                out_rek = io.BytesIO()
-                with pd.ExcelWriter(out_rek) as w: final_rekap.to_excel(w, index=False)
-                st.download_button("📥 Klik Download", out_rek.getvalue(), f"test_Full_Rekap_{target_v}.xlsx")
-
-    with tab_mas:
-        master_exists = False
-        try:
-            cloudinary.api.resource(MASTER_PATH, resource_type="raw")
-            master_exists = True
-        except: master_exists = False
-
-        # PERMINTAAN 1: SYNC PUBLIC DENGAN PENYAMARAN BROWSER & TIMEOUT 60s
-        st.subheader("Otomatis dari Server PHP")
-        p_sync = st.text_input("Periode Sync (Contoh: 022026):", value=datetime.now().strftime("%m%Y"))
-        if st.button("🔄 Sinkronisasi Master (test_)", use_container_width=True):
-            with st.spinner("Tarik data public..."):
-                try:
-                    sync_url = f"https://inventorycontrolbali.my.id/api/download_data.php?periode={p_sync}&jenisData=paretonkl"
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                    resp_api = requests.get(sync_url, headers=headers, timeout=60)
-                    if resp_api.status_code == 200:
-                        new_df_api = pd.DataFrame(resp_api.json())
-                        new_df_api.columns = [str(c).strip().upper() for c in new_df_api.columns]
-                        old_df_m, _ = get_master_data()
-                        final_m = pd.concat([old_df_m, new_df_api], ignore_index=True).drop_duplicates(subset=['KDTOKO', 'PLU'], keep='last')
-                        if 'KETERANGAN' in final_m.columns: final_m['KETERANGAN'] = ""
-                        buf_m = io.BytesIO()
-                        with pd.ExcelWriter(buf_m) as w: final_m.to_excel(w, index=False)
-                        cloudinary.uploader.upload(buf_m.getvalue(), resource_type="raw", public_id=MASTER_PATH, overwrite=True, invalidate=True)
-                        if master_exists: st.success("✅ Master sukses diperbarui")
-                        else: st.success("✅ Master baru berhasil diupload")
-                        clear_all_caches(); time.sleep(2); st.rerun()
-                    else: st.error(f"Gagal Hubungi Server: Status {resp_api.status_code}")
-                except Exception as e: st.error(f"Error Sync: {e}")
-
-        st.write("---")
-        f_up = st.file_uploader("Upload Master Tambahan Manual (test_)", type=["xlsx"])
-        if f_up and st.button("🚀 Update Master Manual"):
-            old_df_m, _ = get_master_data()
-            new_df_m = pd.read_excel(f_up)
-            new_df_m.columns = [str(c).strip().upper() for c in new_df_m.columns]
-            final_m = pd.concat([old_df_m, new_df_m], ignore_index=True).drop_duplicates(subset=['KDTOKO', 'PLU'], keep='last')
-            if 'KETERANGAN' in final_m.columns: final_m['KETERANGAN'] = ""
-            buf_m = io.BytesIO()
-            with pd.ExcelWriter(buf_m) as w: final_m.to_excel(w, index=False)
-            cloudinary.uploader.upload(buf_m.getvalue(), resource_type="raw", public_id=MASTER_PATH, overwrite=True, invalidate=True)
-            if master_exists: st.success("✅ Master sukses diperbarui")
-            else: st.success("✅ Master baru berhasil diupload")
-            clear_all_caches(); time.sleep(2); st.rerun()
-
-        st.divider()
-        if st.button("🔥 Hapus Master Aktif (test_)", type="primary"):
-            cloudinary.uploader.destroy(MASTER_PATH, resource_type="raw")
-            clear_all_caches(); st.success("Terhapus!"); st.rerun()
-
-    with tab_usr:
-        st.subheader("Reset Password User")
-        nik_man = st.text_input("Ketik NIK User:")
-        db_usr_adm = get_user_db_safe()
-        if nik_man and db_usr_adm and nik_man in db_usr_adm:
-            st.success(f"User {nik_man} ditemukan")
-            p_new = st.text_input("Password Baru:", type="password")
-            if st.button("Update Sekarang"):
-                db_usr_adm[nik_man] = p_new
-                if update_user_db(db_usr_adm): st.success("Reset Password Sukses!"); time.sleep(2); st.rerun()
-        elif nik_man: st.error("NIK tidak ditemukan.")
-
-    with tab_res:
-        if st.button("🔥 RESET HASIL INPUT (test_)", type="primary"):
-            res_res = cloudinary.api.resources(resource_type="raw", type="upload", prefix="pareto_nkl/hasil/test_Hasil_")
-            pids_res = [f['public_id'] for f in res_res.get('resources', [])]
-            if pids_res: cloudinary.api.delete_resources(pids_res, resource_type="raw")
-            clear_all_caches(); st.success("Bersih!"); time.sleep(2); st.rerun()
-
-    if st.button("🚪 Logout Admin", use_container_width=True):
-        clear_all_caches(); st.session_state.page = "HOME"; st.rerun()
-
-# =================================================================
-# 5. USER INPUT (NK/NL SEPARATION & TEST_ NAMING)
-# =================================================================
-elif st.session_state.page == "USER_INPUT":
-    st.title("📋 Input Pareto")
-    df_m_in, v_master_in = get_master_data()
-    if not df_m_in.empty:
-        sel_am_in = st.selectbox("1. PILIH AM:", sorted(df_m_in['AM'].unique()))
-        df_f_am_in = df_m_in[df_m_in['AM'] == sel_am_in]
-        sel_nama_in = st.selectbox("2. PILIH NAMA TOKO:", sorted(df_f_am_in['NAMA TOKO'].unique()))
-        df_sel_in = df_f_am_in[df_f_am_in['NAMA TOKO'] == sel_nama_in]
-        
-        if not df_sel_in.empty:
-            v_kdtoko, v_as = str(df_sel_in['KDTOKO'].iloc[0]), str(df_sel_in['AS'].iloc[0])
-            c1, c2, c3 = st.columns([2, 2, 1])
-            c1.metric("KDTOKO:", v_kdtoko); c2.metric("AS:", v_as)
-            with c3:
-                if st.button("🔄 Refresh", key="btn_ref"): clear_all_caches(); st.rerun()
-
-            existing_res = get_existing_result(v_kdtoko, v_master_in)
-            if existing_res is not None:
-                if not validate_file_exists_in_cloudinary(v_kdtoko, v_master_in): existing_res = None
-            
-            data_final_in = df_sel_in.copy()
-            data_final_in['PLU'] = data_final_in['PLU'].astype(str).str.strip()
-
-            if existing_res is not None:
-                cloud_dat = existing_res[['PLU', 'KETERANGAN']].copy()
-                cloud_dat['PLU'] = cloud_dat['PLU'].astype(str).str.strip()
-                if 'KETERANGAN' in data_final_in.columns: data_final_in = data_final_in.drop(columns=['KETERANGAN'])
-                data_final_in = data_final_in.merge(cloud_dat.drop_duplicates(subset=['PLU']), on='PLU', how='left')
-                st.success(f"✅ Sinkronisasi Berhasil: Isian lama Seri {v_master_in} dimuat.")
-            else: data_final_in['KETERANGAN'] = ""
-
-            data_final_in['KETERANGAN'] = data_final_in['KETERANGAN'].fillna("")
-            for col in ['PLU', 'DESC', 'KETERANGAN']: 
-                data_final_in[col] = data_final_in[col].astype(str).replace(['nan','NaN','None'], '')
-            for col in ['QTY', 'RUPIAH']: 
-                data_final_in[col] = pd.to_numeric(data_final_in[col], errors='coerce').fillna(0)
-
-            df_nk = data_final_in[data_final_in['RUPIAH'] < 0].copy()
-            df_nl = data_final_in[data_final_in['RUPIAH'] >= 0].copy()
-
-            config_user = {
-                "PLU": st.column_config.TextColumn("PLU"),
-                "DESC": st.column_config.TextColumn("DESC"),
-                "QTY": st.column_config.NumberColumn("QTY", format="%,d"),
-                "RUPIAH": st.column_config.NumberColumn("RUPIAH", format="%,d"),
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            header {visibility: hidden;}
+            footer {visibility: hidden;}
+            .block-container {
+                padding-top: 2rem;
+                padding-bottom: 0rem;
             }
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_html=True)
 
-            st.markdown('<div class="nk-label"><b>🟥 20 item minus (NK) terbesar harap isi keterangan!</b></div>', unsafe_allow_html=True)
-            d_hash = hashlib.md5(pd.util.hash_pandas_object(df_nk).values).hexdigest()
-            edited_nk = st.data_editor(
-                df_nk[['PLU', 'DESC', 'QTY', 'RUPIAH', 'KETERANGAN']], 
-                column_config={**config_user, "KETERANGAN": st.column_config.TextColumn("KETERANGAN (Wajib Isi)", required=True)}, 
-                hide_index=True, use_container_width=True, key=f"ed_nk_{v_kdtoko}_{d_hash}"
-            )
+# ==========================================
+# 2. KONFIGURASI CLOUDINARY
+# ==========================================
+cloudinary.config(
+    cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"],
+    api_key = st.secrets["CLOUDINARY_API_KEY"],
+    api_secret = st.secrets["CLOUDINARY_API_SECRET"],
+    secure = True
+)
 
-            st.markdown('<div class="nl-label"><b>🟩 20 item plus terbesar (NL) hanya sebagai penampil saja!</b></div>', unsafe_allow_html=True)
-            st.dataframe(df_nl[['PLU', 'DESC', 'QTY', 'RUPIAH']], column_config=config_user, hide_index=True, use_container_width=True)
+PUBLIC_FILE_ID = "data_saybread.xlsx"
+PUBLIC_PERIODE_ID = "periode_saybread.txt" # File pendamping untuk menyimpan tanggal
 
-            if st.button("🚀 Simpan Hasil Input", type="primary", use_container_width=True):
-                if edited_nk['KETERANGAN'].apply(lambda x: str(x).strip() == "").any():
-                    st.error("⚠️ Semua kolom KETERANGAN item MINUS (NK) wajib diisi!")
-                else:
-                    df_nk['KETERANGAN'] = edited_nk['KETERANGAN'].values
-                    df_nl['KETERANGAN'] = "ini item nl!" # Otomasi Keterangan NL
-                    combined_save = pd.concat([df_nk, df_nl], ignore_index=True)
-                    orig_m_cols = [c for c in df_m_in.columns if c != 'KETERANGAN']
-                    final_out = combined_save[orig_m_cols + ['KETERANGAN']]
-                    buf_s = io.BytesIO()
-                    with pd.ExcelWriter(buf_s) as w: final_out.to_excel(w, index=False)
-                    # PERMINTAAN 2: Simpan hasil dengan awalan "test_"
-                    p_id = f"pareto_nkl/hasil/test_Hasil_{v_kdtoko}_v{v_master_in}.xlsx"
-                    cloudinary.uploader.upload(buf_s.getvalue(), resource_type="raw", public_id=p_id, overwrite=True, invalidate=True)
-                    st.balloons(); st.success("✅ Input keterangan sukses!"); time.sleep(2); clear_all_caches(); st.rerun()
+st.title("🍞 Portal Say Bread")
 
-    if st.button("🚪 Keluar (Logout)", use_container_width=True, key="btn_logout_user"): 
-        clear_all_caches(); st.session_state.page = "HOME"; st.rerun()
+# ==========================================
+# 3. MENU UTAMA MENGGUNAKAN TABS
+# ==========================================
+tab_monitoring, tab_admin = st.tabs(["📊 Monitoring Say Bread", "🔐 Admin"])
+
+# ------------------------------------------
+# ISI TAB 1: MONITORING SAY BREAD
+# ------------------------------------------
+with tab_monitoring:
+    st.subheader("Pencarian Data Toko")
+    
+    cloud_name = st.secrets["CLOUDINARY_CLOUD_NAME"]
+    base_url = f"https://res.cloudinary.com/{cloud_name}/raw/upload/{PUBLIC_FILE_ID}"
+    periode_url = f"https://res.cloudinary.com/{cloud_name}/raw/upload/{PUBLIC_PERIODE_ID}"
+    
+    fetch_url = f"{base_url}?t={int(time.time())}"
+    fetch_periode_url = f"{periode_url}?t={int(time.time())}"
+
+    try:
+        # Mengambil file Excel
+        response = requests.get(fetch_url)
+        
+        # Mengambil file Teks Periode (Jika ada)
+        teks_periode = "Belum diatur"
+        try:
+            resp_periode = requests.get(fetch_periode_url)
+            if resp_periode.status_code == 200:
+                teks_periode = resp_periode.text
+        except:
+            pass # Abaikan jika file periode belum dibuat oleh admin
+            
+        if response.status_code == 200:
+            df = pd.read_excel(BytesIO(response.content))
+            df['Toko'] = df['Toko'].astype(str).str.strip().str.upper()
+
+            # 1. Menampilkan Label Periode Data
+            st.markdown(f"#### 📅 Periode Data: `{teks_periode}`")
+            st.write("") # Spasi kosong
+
+            # 2. Kolom Input Kode Toko
+            input_toko = st.text_input("🔍 Masukkan 4 Digit Kode Toko:", max_chars=4, placeholder="Contoh: F08C").upper()
+
+            if input_toko:
+                if len(input_toko) < 4:
+                    st.error("⚠️ Error: Kode toko harus terdiri dari 4 digit alfanumerik!")
+                elif len(input_toko) == 4:
+                    filtered_df = df[df['Toko'] == input_toko]
+
+                    if filtered_df.empty:
+                        st.warning(f"⚠️ Data untuk kode toko '{input_toko}' tidak ditemukan.")
+                    else:
+                        st.markdown("---")
+                        
+                        # Label Nama, AM, dan AS
+                        nama_toko = filtered_df.iloc[0]['Nama']
+                        am_toko = filtered_df.iloc[0]['AM']
+                        as_toko = filtered_df.iloc[0]['AS']
+
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.success(f"**🏷️ Nama Toko:**\n\n{nama_toko}")
+                        with col2:
+                            st.info(f"**👤 AM:**\n\n{am_toko}")
+                        with col3:
+                            st.warning(f"**👥 AS:**\n\n{as_toko}")
+                        
+                        st.write("")
+
+                        # Tampilan Data Terbatas di Layar
+                        kolom_tampil = [
+                            'PLU Jual', 'Deskripsi', 'Qty Produksi', 'Qty Sales', 
+                            'QTY Total Rusak', '% Rusak By Qty', 'Avg Produksi', 
+                            'Avg Sales', 'Avg Rusak'
+                        ]
+                        
+                        kolom_tersedia = [col for col in kolom_tampil if col in filtered_df.columns]
+                        display_df = filtered_df[kolom_tersedia]
+
+                        st.write(f"**Tabel Data Item - {nama_toko}**")
+                        
+                        # 3. Menampilkan dataframe dengan Format 2 digit desimal
+                        st.dataframe(
+                            display_df, 
+                            hide_index=True, 
+                            use_container_width=True,
+                            column_config={
+                                # Mengatur kolom-kolom persentase & rata-rata menjadi 2 digit di belakang koma (%.2f)
+                                "% Rusak By Qty": st.column_config.NumberColumn(format="%.2f"),
+                                "Avg Produksi": st.column_config.NumberColumn(format="%.2f"),
+                                "Avg Sales": st.column_config.NumberColumn(format="%.2f"),
+                                "Avg Rusak": st.column_config.NumberColumn(format="%.2f")
+                            }
+                        )
+
+                        st.markdown("<br>", unsafe_allow_html=True)
+
+                        # Tombol Download Data Lengkap
+                        output = BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            filtered_df.to_excel(writer, index=False, sheet_name='Data_Toko')
+                        excel_data = output.getvalue()
+
+                        st.download_button(
+                            label=f"📥 Download Data Lengkap {input_toko} (Excel)",
+                            data=excel_data,
+                            file_name=f"Data_SayBread_{input_toko}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary"
+                        )
+        else:
+            st.info("ℹ️ Belum ada data sumber yang diunggah oleh Admin.")
+            
+    except Exception as e:
+        st.error(f"Terjadi kesalahan sistem: {e}")
+
+
+# ------------------------------------------
+# ISI TAB 2: ADMIN AREA
+# ------------------------------------------
+with tab_admin:
+    st.subheader("Halaman Admin")
+    
+    password_input = st.text_input("Masukkan Password Admin:", type="password", key="admin_pass")
+    
+    if password_input == "icnbr034":
+        st.success("🔓 Login Berhasil! Selamat datang Admin.")
+        st.markdown("---")
+        
+        # Input Kalender (Bisa pilih 1 tanggal atau rentang tanggal)
+        st.write("**1. Tentukan Periode Data:**")
+        input_periode = st.date_input("Pilih Tanggal Periode (Bisa pilih rentang/range):", [])
+        
+        # Konversi input kalender menjadi teks
+        if len(input_periode) == 2:
+            teks_periode_upload = f"{input_periode[0].strftime('%d %B %Y')} - {input_periode[1].strftime('%d %B %Y')}"
+        elif len(input_periode) == 1:
+            teks_periode_upload = f"{input_periode[0].strftime('%d %B %Y')}"
+        else:
+            teks_periode_upload = "Periode Tidak Ditentukan"
+
+        st.write("**2. Upload File Excel Master:**")
+        uploaded_file = st.file_uploader("Pilih file Excel", type=["xlsx", "xls"], key="uploader")
+        
+        if uploaded_file is not None:
+            if st.button("📤 Upload & Perbarui Data"):
+                with st.spinner("Mengunggah data ke Cloudinary..."):
+                    try:
+                        # Upload File Excel
+                        cloudinary.uploader.upload(
+                            uploaded_file,
+                            resource_type="raw",
+                            public_id=PUBLIC_FILE_ID,
+                            overwrite=True,
+                            invalidate=True
+                        )
+                        
+                        # Upload Teks Periode sebagai file text ke Cloudinary
+                        cloudinary.uploader.upload(
+                            BytesIO(teks_periode_upload.encode('utf-8')),
+                            resource_type="raw",
+                            public_id=PUBLIC_PERIODE_ID,
+                            overwrite=True,
+                            invalidate=True
+                        )
+                        
+                        st.success("✅ File dan Periode berhasil diperbarui! Silakan cek tab Monitoring.")
+                    except Exception as e:
+                        st.error(f"❌ Gagal mengunggah file: {e}")
+                        
+    elif password_input != "":
+        st.error("❌ Password Salah! Anda tidak memiliki akses.")
